@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>USDT Pairs Trend Status</title>
+  <!-- Added viewport meta tag for responsiveness -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #tokens {
+      margin-top: 20px;
+      padding: 0 10px;
+    }
+    .token {
+      padding: 10px;
+      border-bottom: 1px solid #ccc;
+      display: flex;
+      flex-direction: column;
+    }
+    .token-name {
+      font-weight: bold;
+      font-size: 1.2em;
+    }
+    .token-info {
+      display: flex;
+      flex-wrap: wrap;
+      margin-top: 5px;
+    }
+    .token-info span {
+      margin-right: 10px;
+      font-size: 1em;
+    }
+    .token-price {
+      color: #333;
+    }
+    .token-change {
+      color: green;
+    }
+    .token-change.negative {
+      color: red;
+    }
+    .trend-status {
+      font-style: italic;
+    }
+    .trend-entering {
+      color: blue;
+    }
+    .trend-middle {
+      color: green;
+    }
+    .trend-leaving {
+      color: red;
+    }
+    /* Responsive adjustments */
+    @media (min-width: 600px) {
+      .token {
+        flex-direction: row;
+        align-items: center;
+      }
+      .token-name {
+        margin-right: 20px;
+      }
+      .token-info {
+        margin-top: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<h1>USDT Pairs Trend Status</h1>
+<div id="tokens">
+  <p>Loading tokens...</p>
+</div>
+
+<script>
+  // JavaScript code remains unchanged
+  async function startApp() {
+    const tokensDiv = document.getElementById('tokens');
+
+    // Store price data for each token
+    const priceData = {};
+
+    // Tokens with their trend statuses
+    const tokensWithStatus = {};
+
+    // Connect to the !ticker@arr stream to get 24-hour change data
+    const ws = new WebSocket('wss://stream.binance.com:9443/ws/!ticker@arr');
+
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      tokensDiv.innerHTML = '<p>No tokens are currently displayed.</p>';
+    };
+
+    ws.onmessage = event => {
+      const dataArray = JSON.parse(event.data);
+
+      dataArray.forEach(data => {
+        const symbol = data.s;
+
+        // Only consider USDT pairs
+        if (!symbol.endsWith('USDT')) {
+          return;
+        }
+
+        const closePrice = parseFloat(data.c);
+        const priceChangePercent = parseFloat(data.P); // 24-hour percentage change
+
+        const now = Date.now();
+
+        if (!priceData[symbol]) {
+          // Initialize data for the token
+          priceData[symbol] = {
+            openPrice1m: closePrice,
+            openPrice1h: closePrice,
+            lastUpdate1m: now,
+            lastUpdate1h: now,
+            priceChangePercent: priceChangePercent,
+            lastClosePrice: closePrice,
+            lastTrend1m: null,
+            lastTrend1h: null,
+          };
+        } else {
+          const tokenData = priceData[symbol];
+
+          // Update intervals
+          if (now - tokenData.lastUpdate1m >= 60 * 1000) {
+            tokenData.openPrice1m = tokenData.lastClosePrice || closePrice;
+            tokenData.lastUpdate1m = now;
+          }
+
+          if (now - tokenData.lastUpdate1h >= 60 * 60 * 1000) {
+            tokenData.openPrice1h = tokenData.lastClosePrice || closePrice;
+            tokenData.lastUpdate1h = now;
+          }
+
+          // Update last close price and 24-hour change
+          tokenData.lastClosePrice = closePrice;
+          tokenData.priceChangePercent = priceChangePercent;
+
+          // Check trend status
+          checkTrendStatus(symbol);
+        }
+      });
+    };
+
+    ws.onerror = error => {
+      console.error('WebSocket error:', error);
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket closed');
+    };
+
+    // Check the trend status for the token
+    function checkTrendStatus(symbol) {
+      const data = priceData[symbol];
+      if (data) {
+        // Current trend directions
+        const isUp1m = data.lastClosePrice > data.openPrice1m;
+        const isUp1h = data.lastClosePrice > data.openPrice1h;
+
+        // Determine trend status for each interval
+        const trendStatus1m = getTrendStatus(data.lastTrend1m, isUp1m);
+        const trendStatus1h = getTrendStatus(data.lastTrend1h, isUp1h);
+
+        // Update last trend directions
+        data.lastTrend1m = isUp1m;
+        data.lastTrend1h = isUp1h;
+
+        // Determine overall trend status
+        if (trendStatus1m && trendStatus1h) {
+          // Both intervals have a trend status
+          const overallStatus = combineTrendStatuses(trendStatus1m, trendStatus1h);
+          if (overallStatus) {
+            tokensWithStatus[symbol] = {
+              symbol: symbol,
+              status: overallStatus,
+              lastClosePrice: data.lastClosePrice,
+              priceChangePercent: data.priceChangePercent,
+            };
+          } else {
+            delete tokensWithStatus[symbol];
+          }
+        } else {
+          // Remove token if it doesn't meet criteria
+          delete tokensWithStatus[symbol];
+        }
+
+        updateDisplay();
+      }
+    }
+
+    // Determine trend status based on previous and current trend
+    function getTrendStatus(lastTrend, isUp) {
+      if (lastTrend === null) {
+        // Initial state, cannot determine trend status
+        return null;
+      } else if (lastTrend === false && isUp === true) {
+        return 'entering';
+      } else if (lastTrend === true && isUp === true) {
+        return 'middle';
+      } else if (lastTrend === true && isUp === false) {
+        return 'leaving';
+      } else {
+        return null; // Does not meet criteria
+      }
+    }
+
+    // Combine trend statuses of both intervals
+    function combineTrendStatuses(status1m, status1h) {
+      if (status1m === 'entering' && status1h === 'entering') {
+        return 'Entering Upward Trend';
+      } else if ((status1m === 'entering' || status1m === 'middle') && (status1h === 'entering' || status1h === 'middle')) {
+        return 'In Upward Trend';
+      } else if (status1m === 'leaving' && status1h === 'leaving') {
+        return 'Leaving Upward Trend';
+      } else {
+        return null;
+      }
+    }
+
+    // Update the display with tokens and their trend statuses
+    function updateDisplay() {
+      tokensDiv.innerHTML = '';
+
+      const tokensArray = Object.values(tokensWithStatus);
+
+      if (tokensArray.length === 0) {
+        tokensDiv.innerHTML = '<p>No tokens are currently displayed.</p>';
+        return;
+      }
+
+      tokensArray.forEach(token => {
+        const priceChangeClass = token.priceChangePercent >= 0 ? 'token-change' : 'token-change negative';
+        const trendClass = getTrendClass(token.status);
+
+        const tokenDiv = document.createElement('div');
+        tokenDiv.className = 'token';
+
+        tokenDiv.innerHTML = `
+          <span class="token-name">${token.symbol}</span>
+          <div class="token-info">
+            <span class="token-price">Price: ${parseFloat(token.lastClosePrice).toFixed(6)}</span>
+            <span class="${priceChangeClass}">24h Change: ${token.priceChangePercent.toFixed(2)}%</span>
+            <span class="trend-status ${trendClass}">${token.status}</span>
+          </div>
+        `;
+        tokensDiv.appendChild(tokenDiv);
+      });
+    }
+
+    // Get CSS class based on trend status
+    function getTrendClass(status) {
+      switch (status) {
+        case 'Entering Upward Trend':
+          return 'trend-entering';
+        case 'In Upward Trend':
+          return 'trend-middle';
+        case 'Leaving Upward Trend':
+          return 'trend-leaving';
+        default:
+          return '';
+      }
+    }
+  }
+
+  startApp();
+</script>
+
+</body>
+</html>
